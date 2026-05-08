@@ -86,8 +86,9 @@
         } else {
           document.getElementById('msg').innerText = result.message;
         }
-      } catch (error) {
-        document.getElementById('msg').innerText = '連線失敗，請稍後再試。';
+            } catch (error) {
+        document.getElementById('msg').innerText = '連線失敗: ' + error.message;
+        console.error("詳細錯誤:", error);
       }
     }
 
