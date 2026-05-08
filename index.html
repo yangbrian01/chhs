@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>專屬付費閱讀器</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js"></script>
+  <style>
+    /* 基礎防禦與暗黑模式 UI */
+    body {
+      background: #121212; color: #fff; font-family: sans-serif;
+      margin: 0; padding: 0;
+      user-select: none; /* 禁止選取文字 */
+      -webkit-user-select: none;
+    }
+    
+    #login-container {
+      display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh;
+    }
+    input, button {
+      margin: 10px; padding: 12px; font-size: 16px; border-radius: 5px; border: none;
+    }
+    button { background: #007bff; color: white; cursor: pointer; width: 200px; }
+    
+    #viewer-container { display: none; text-align: center; padding: 20px 0; }
+    canvas { max-width: 100%; border: 1px solid #333; margin-bottom: 20px; }
+
+    /* 動態浮水印核心 CSS */
+    #watermark {
+      position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
+      pointer-events: none; /* 關鍵：讓滑鼠點擊可以穿透浮水印 */
+      z-index: 9999; display: none; opacity: 0.15; /* 透明度低，防截圖但不影響閱讀 */
+      font-size: 24px; font-weight: bold; color: white;
+      transform: rotate(-30deg) scale(1.5);
+      white-space: pre-wrap; overflow: hidden;
+      text-align: center; line-height: 100px;
+    }
+  </style>
+</head>
+<body oncontextmenu="return false;">
+
+  <div id="watermark"></div>
+
+  <div id="login-container">
+    <h2>系統登入</h2>
+    <input type="text" id="username" placeholder="請輸入帳號">
+    <input type="password" id="password" placeholder="請輸入密碼">
+    <button onclick="login()">登入並閱讀</button>
+    <p id="msg" style="color: #ff5555;"></p>
+  </div>
+
+  <div id="viewer-container">
+    <button onclick="logout()" style="background: #dc3545;">登出系統</button>
+    <div id="pdf-render-area"></div>
+  </div>
+
+  <script>
+    // ★★★ 填入你的 GAS Web App URL ★★★
+    const GAS_URL = '你的_GAS_網頁應用程式網址_請貼在這裡';
+    
+    let currentUser = '';
+    let currentToken = '';
+
+    // 設定 PDF.js 的 worker 路徑
+    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.worker.min.js';
+
+    async function login() {
+      const user = document.getElementById('username').value;
+      const pass = document.getElementById('password').value;
+      document.getElementById('msg').innerText = '驗證中...';
+
+      try {
+        // 使用 text/plain 避免 GAS CORS 預檢請求問題
+        const response = await fetch(GAS_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+          body: JSON.stringify({ action: 'login', username: user, password: pass })
+        });
+        
+        const result = await response.json();
+        if (result.success) {
+          currentUser = user;
+          currentToken = result.token;
+          showViewer();
+          loadPdf();
+        } else {
+          document.getElementById('msg').innerText = result.message;
+        }
+      } catch (error) {
+        document.getElementById('msg').innerText = '連線失敗，請稍後再試。';
+      }
+    }
+
+    async function loadPdf() {
+      document.getElementById('pdf-render-area').innerHTML = '<p>安全載入加密文件中，請稍候...</p>';
+      
+      try {
+        const response = await fetch(GAS_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+          body: JSON.stringify({ action: 'getPdf', username: currentUser, token: currentToken })
+        });
+        
+        const result = await response.json();
+        
+        if (result.success) {
+          // 將 Base64 轉為二進位資料交給 PDF.js
+          const pdfData = atob(result.pdfBase64);
+          renderPdf(pdfData);
+        } else {
+          alert(result.message);
+          logout(); // 被踢下線
+        }
+      } catch (error) {
+        document.getElementById('pdf-render-area').innerHTML = '<p style="color:red;">載入失敗</p>';
+      }
+    }
+
+    async function renderPdf(pdfData) {
+      const loadingTask = pdfjsLib.getDocument({ data: pdfData });
+      const pdf = await loadingTask.promise;
+      const renderArea = document.getElementById('pdf-render-area');
+      renderArea.innerHTML = ''; // 清空載入文字
+
+      // 逐頁渲染到 Canvas
+      for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
+        const page = await pdf.getPage(pageNum);
+        const viewport = page.getViewport({ scale: 1.5 }); // 放大 1.5 倍確保清晰度
+        
+        const canvas = document.createElement('canvas');
+        const context = canvas.getContext('2d');
+        canvas.height = viewport.height;
+        canvas.width = viewport.width;
+        
+        renderArea.appendChild(canvas);
+        
+        await page.render({ canvasContext: context, viewport: viewport }).promise;
+      }
+    }
+
+    function showViewer() {
+      document.getElementById('login-container').style.display = 'none';
+      document.getElementById('viewer-container').style.display = 'block';
+      
+      // 鋪滿動態浮水印
+      const wm = document.getElementById('watermark');
+      wm.style.display = 'block';
+      // 產生密集的帳號字串作為浮水印
+      const wmText = (`買家專屬授權: ${currentUser}   `).repeat(100);
+      wm.innerText = wmText;
+    }
+
+    function logout() {
+      currentUser = '';
+      currentToken = '';
+      document.getElementById('username').value = '';
+      document.getElementById('password').value = '';
+      document.getElementById('msg').innerText = '';
+      document.getElementById('watermark').style.display = 'none';
+      document.getElementById('login-container').style.display = 'flex';
+      document.getElementById('viewer-container').style.display = 'none';
+      document.getElementById('pdf-render-area').innerHTML = '';
+    }
+  </script>
+</body>
+</html>
