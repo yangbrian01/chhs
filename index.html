@@ -3,37 +3,42 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>專屬付費閱讀器</title>
+  <title>專屬數位內容檢視系統</title>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js"></script>
   <style>
-    /* 基礎防禦與暗黑模式 UI */
     body {
-      background: #121212; color: #fff; font-family: sans-serif;
-      margin: 0; padding: 0;
-      user-select: none; /* 禁止選取文字 */
-      -webkit-user-select: none;
+      background: #121212; color: #fff; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      margin: 0; padding: 0; user-select: none; -webkit-user-select: none;
     }
+    .container {
+      display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh;
+      padding: 20px; box-sizing: border-box;
+    }
+    h2 { margin-bottom: 30px; letter-spacing: 2px; }
+    input {
+      padding: 15px; font-size: 16px; border-radius: 8px; border: 1px solid #444; 
+      background: #222; color: #fff; width: 250px; text-align: center; margin-bottom: 20px;
+    }
+    button {
+      padding: 12px 24px; font-size: 16px; border-radius: 8px; border: none;
+      background: #007bff; color: white; cursor: pointer; transition: 0.3s; margin: 10px;
+    }
+    button:hover { background: #0056b3; }
+    .file-btn { background: #28a745; width: 80%; max-width: 400px; display: block; margin: 10px auto; }
+    .file-btn:hover { background: #218838; }
     
-    #login-container {
-      display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh;
-    }
-    input, button {
-      margin: 10px; padding: 12px; font-size: 16px; border-radius: 5px; border: none;
-    }
-    button { background: #007bff; color: white; cursor: pointer; width: 200px; }
+    #list-container, #viewer-container { display: none; width: 100%; text-align: center; }
+    #pdf-render-area canvas { max-width: 100%; border: 1px solid #333; margin-bottom: 15px; }
     
-    #viewer-container { display: none; text-align: center; padding: 20px 0; }
-    canvas { max-width: 100%; border: 1px solid #333; margin-bottom: 20px; }
+    .nav-bar { background: #1a1a1a; padding: 15px; text-align: center; position: sticky; top: 0; z-index: 100; box-shadow: 0 4px 6px rgba(0,0,0,0.3);}
 
-    /* 動態浮水印核心 CSS */
+    /* 浮水印設計 */
     #watermark {
       position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
-      pointer-events: none; /* 關鍵：讓滑鼠點擊可以穿透浮水印 */
-      z-index: 9999; display: none; opacity: 0.3; /* 透明度調高一點點，確保你看得到 */
-      font-size: 24px; font-weight: bold; color: #555555; /* 改成深灰色，這樣白底也看得到 */
-      transform: rotate(-30deg) scale(1.5);
-      white-space: pre-wrap; overflow: hidden;
-      text-align: center; line-height: 100px;
+      pointer-events: none; z-index: 9999; display: none; opacity: 0.35; 
+      font-size: 22px; font-weight: bold; color: #666; /* 灰色字體防白底隱形 */
+      transform: rotate(-25deg) scale(1.5);
+      white-space: pre-wrap; overflow: hidden; text-align: center; line-height: 120px;
     }
   </style>
 </head>
@@ -41,79 +46,118 @@
 
   <div id="watermark"></div>
 
-  <div id="login-container">
-    <h2>系統登入</h2>
-    <input type="text" id="username" placeholder="請輸入帳號">
-    <input type="password" id="password" placeholder="請輸入密碼">
-    <button onclick="login()">登入並閱讀</button>
-    <p id="msg" style="color: #ff5555;"></p>
+  <div id="login-container" class="container">
+    <h2>專屬數位內容存取</h2>
+    <input type="text" id="accessCode" placeholder="請輸入您的專屬授權碼">
+    <button onclick="login()">驗證並進入</button>
+    <p id="msg" style="color: #ff5555; margin-top: 15px;"></p>
+  </div>
+
+  <div id="list-container" class="container" style="justify-content: flex-start; padding-top: 50px;">
+    <h2>📚 您的已購檔案</h2>
+    <p style="color: #aaa; margin-bottom: 30px;">請點擊下方按鈕開始閱讀。請勿外流，系統將全程記錄。</p>
+    <div id="file-buttons"></div>
+    <button onclick="logout()" style="background: #dc3545; margin-top: 50px;">登出系統</button>
   </div>
 
   <div id="viewer-container">
-    <button onclick="logout()" style="background: #dc3545;">登出系統</button>
-    <div id="pdf-render-area"></div>
+    <div class="nav-bar">
+      <button onclick="backToList()" style="background: #6c757d;">⬅ 返回目錄</button>
+      <span id="current-doc-title" style="margin-left: 15px; font-weight: bold;"></span>
+    </div>
+    <div id="pdf-render-area" style="padding: 20px;"></div>
   </div>
 
   <script>
-    // ★★★ 填入你的 GAS Web App URL ★★★
+    // ★★★ 換成你剛剛「新增部署」拿到的全新網址 ★★★
     const GAS_URL = 'https://script.google.com/macros/s/AKfycby5pAtvkCgHf3wk7A0f8oyAqnp3XycPjklPJgwLl0a7m8NYQBKuWJhaDHp0wipmoVds/exec';
     
-    let currentUser = '';
+    let currentAccessCode = '';
     let currentToken = '';
+    let currentBuyerInfo = ''; // 用來存浮水印文字
 
-    // 設定 PDF.js 的 worker 路徑
     pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.worker.min.js';
 
     async function login() {
-      const user = document.getElementById('username').value;
-      const pass = document.getElementById('password').value;
-      document.getElementById('msg').innerText = '驗證中...';
+      const code = document.getElementById('accessCode').value.trim();
+      if(!code) return;
+      
+      document.getElementById('msg').innerText = '驗證授權碼中...';
 
       try {
-        // 使用 text/plain 避免 GAS CORS 預檢請求問題
         const response = await fetch(GAS_URL, {
           method: 'POST',
           headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-          body: JSON.stringify({ action: 'login', username: user, password: pass })
+          body: JSON.stringify({ action: 'login', accessCode: code })
         });
         
         const result = await response.json();
         if (result.success) {
-          currentUser = user;
+          currentAccessCode = code;
           currentToken = result.token;
-          showViewer();
-          loadPdf();
+          currentBuyerInfo = result.buyerInfo;
+          
+          buildFileList(result.files);
+          showScreen('list');
         } else {
           document.getElementById('msg').innerText = result.message;
         }
-            } catch (error) {
-        document.getElementById('msg').innerText = '連線失敗: ' + error.message;
-        console.error("詳細錯誤:", error);
+      } catch (error) {
+        document.getElementById('msg').innerText = '系統連線異常，請稍後再試。';
       }
     }
 
-    async function loadPdf() {
-      document.getElementById('pdf-render-area').innerHTML = '<p>安全載入加密文件中，請稍候...</p>';
+    function buildFileList(files) {
+      const container = document.getElementById('file-buttons');
+      container.innerHTML = '';
+      if(files.length === 0) {
+        container.innerHTML = '<p>您目前沒有購買任何檔案。</p>';
+        return;
+      }
+      files.forEach(file => {
+        const btn = document.createElement('button');
+        btn.className = 'file-btn';
+        btn.innerText = '📖 ' + file.name;
+        btn.onclick = () => loadPdf(file.code, file.name);
+        container.appendChild(btn);
+      });
+    }
+
+    async function loadPdf(fileCode, fileName) {
+      showScreen('viewer');
+      document.getElementById('current-doc-title').innerText = fileName;
+      document.getElementById('pdf-render-area').innerHTML = '<h3 style="margin-top:50px;">正在安全解密檔案中，請稍候...</h3>';
       
+      // 啟動浮水印
+      const wm = document.getElementById('watermark');
+      wm.style.display = 'block';
+      // 將買家資訊重複鋪滿畫面，你可以加上嚴厲的警告文字
+      const wmText = (`嚴禁外流 / 授權給: ${currentBuyerInfo}   `).repeat(80);
+      wm.innerText = wmText;
+
       try {
         const response = await fetch(GAS_URL, {
           method: 'POST',
           headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-          body: JSON.stringify({ action: 'getPdf', username: currentUser, token: currentToken })
+          body: JSON.stringify({ 
+            action: 'getPdf', 
+            accessCode: currentAccessCode, 
+            token: currentToken,
+            fileCode: fileCode
+          })
         });
         
         const result = await response.json();
         
         if (result.success) {
-          // 將 Base64 轉為二進位資料交給 PDF.js
           const pdfData = atob(result.pdfBase64);
           renderPdf(pdfData);
         } else {
           alert(result.message);
-          logout(); // 被踢下線
+          logout();
         }
       } catch (error) {
-        document.getElementById('pdf-render-area').innerHTML = '<p style="color:red;">載入失敗</p>';
+        document.getElementById('pdf-render-area').innerHTML = '<p style="color:red;">載入失敗，請檢查網路連線。</p>';
       }
     }
 
@@ -121,12 +165,11 @@
       const loadingTask = pdfjsLib.getDocument({ data: pdfData });
       const pdf = await loadingTask.promise;
       const renderArea = document.getElementById('pdf-render-area');
-      renderArea.innerHTML = ''; // 清空載入文字
+      renderArea.innerHTML = ''; 
 
-      // 逐頁渲染到 Canvas
       for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
         const page = await pdf.getPage(pageNum);
-        const viewport = page.getViewport({ scale: 1.5 }); // 放大 1.5 倍確保清晰度
+        const viewport = page.getViewport({ scale: 1.5 });
         
         const canvas = document.createElement('canvas');
         const context = canvas.getContext('2d');
@@ -134,33 +177,32 @@
         canvas.width = viewport.width;
         
         renderArea.appendChild(canvas);
-        
         await page.render({ canvasContext: context, viewport: viewport }).promise;
       }
     }
 
-    function showViewer() {
-      document.getElementById('login-container').style.display = 'none';
-      document.getElementById('viewer-container').style.display = 'block';
+    function showScreen(screen) {
+      document.getElementById('login-container').style.display = screen === 'login' ? 'flex' : 'none';
+      document.getElementById('list-container').style.display = screen === 'list' ? 'flex' : 'none';
+      document.getElementById('viewer-container').style.display = screen === 'viewer' ? 'block' : 'none';
       
-      // 鋪滿動態浮水印
-      const wm = document.getElementById('watermark');
-      wm.style.display = 'block';
-      // 產生密集的帳號字串作為浮水印
-      const wmText = (`買家專屬授權: ${currentUser}   `).repeat(100);
-      wm.innerText = wmText;
+      if(screen !== 'viewer') {
+        document.getElementById('watermark').style.display = 'none';
+        document.getElementById('pdf-render-area').innerHTML = '';
+      }
+    }
+
+    function backToList() {
+      showScreen('list');
     }
 
     function logout() {
-      currentUser = '';
+      currentAccessCode = '';
       currentToken = '';
-      document.getElementById('username').value = '';
-      document.getElementById('password').value = '';
+      currentBuyerInfo = '';
+      document.getElementById('accessCode').value = '';
       document.getElementById('msg').innerText = '';
-      document.getElementById('watermark').style.display = 'none';
-      document.getElementById('login-container').style.display = 'flex';
-      document.getElementById('viewer-container').style.display = 'none';
-      document.getElementById('pdf-render-area').innerHTML = '';
+      showScreen('login');
     }
   </script>
 </body>
